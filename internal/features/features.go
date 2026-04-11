@@ -1,11 +1,11 @@
-// Copyright 2020-2021 Clastix Labs
+// Copyright 2020-2025 Project Capsule Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package features
 
 const (
 	// ProxyAllNamespaced allows to proxy all the Namespaced objects
-	// for all tenant users
+	// for all tenant users (DEPRECATED)
 	//
 	// When enabled, it will discover apis and ensure labels are set
 	// for resources in all tenant namespaces resulting in increased memory
@@ -19,7 +19,8 @@ const (
 	// essentially bypassing any authorization. Only use this option in trusted environments
 	// where authorization/authentication is offloaded to external systems.
 	SkipImpersonationReview = "SkipImpersonationReview"
-
+	// Deprecated: Use Global Proxy Settings instead (https://projectcapsule.dev/docs/proxy/proxysettings/#globalproxysettings)
+	//
 	// ProxyClusterScoped allows to proxy all clusterScoped objects
 	// for all tenant users.
 	ProxyClusterScoped = "ProxyClusterScoped"

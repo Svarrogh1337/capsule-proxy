@@ -18,7 +18,7 @@ IMG             ?= $(IMG_BASE):$(VERSION)
 CAPSULE_PROXY_IMG     ?= $(REGISTRY)/$(IMG_BASE)
 
 ## Kubernetes Version Support
-KUBERNETES_SUPPORTED_VERSION ?= "v1.33.0"
+KUBERNETES_SUPPORTED_VERSION ?= "v1.34.0"
 
 ## Tool Binaries
 KUBECTL ?= kubectl
@@ -38,6 +38,9 @@ GOBIN=$(shell go env GOPATH)/bin
 else
 GOBIN=$(shell go env GOBIN)
 endif
+
+license-headers: nwa
+	$(NWA) config
 
 ####################
 # -- Docker
@@ -111,7 +114,7 @@ helm-lint: ct
 	@$(CT) lint --config .github/configs/ct.yaml --validate-yaml=false --all --debug
 
 helm-schema: helm-plugin-schema
-	cd charts/capsule-proxy && $(HELM) schema
+	cd charts/capsule-proxy && $(HELM) schema --use-helm-docs
 
 helm-test: helm-create helm-install helm-destroy
 
@@ -180,53 +183,63 @@ ifeq ($(CAPSULE_PROXY_MODE),http)
 		--set "options.enableSSL=false" \
 		--set "options.logLevel=10" \
 		--set "options.pprof=true" \
+		--set "options.leaderElection=true" \
 		--set "service.type=NodePort" \
-		--set "service.nodePort=" \
 		--set "kind=DaemonSet" \
 		--set "daemonset.hostNetwork=true" \
 		--set "serviceMonitor.enabled=false" \
 		--set "options.generateCertificates=false" \
-		--set "webhooks.enabled=true" \
-		--set "options.extraArgs={--feature-gates=ProxyClusterScoped=true,--feature-gates=ProxyAllNamespaced=true}"
+		--set "certManager.generateCertificates=false" \
+		--set "options.extraArgs={--feature-gates=ProxyAllNamespaced=true}"
 else
 	@echo "Running in HTTPS mode"
-	@echo "capsule proxy certificates..."
-	cd hack && $(MKCERT) -install && $(MKCERT) 127.0.0.1  \
-		&& kubectl --namespace capsule-system delete secret capsule-proxy || true \
-		&& kubectl --namespace capsule-system create secret generic capsule-proxy --from-file=tls.key=./127.0.0.1-key.pem --from-file=tls.crt=./127.0.0.1.pem --from-literal=ca=$$(cat $(ROOTCA) | base64 |tr -d '\n')
-	@echo "kubeconfig configurations..."
-	@cd hack \
-		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- alice oil projectcapsule.dev,capsule.clastix.io \
-		&& mv alice-oil.kubeconfig alice.kubeconfig \
-		&& KUBECONFIG=alice.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data $$(cat $(ROOTCA) | base64 |tr -d '\n') \
-		&& KUBECONFIG=alice.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
-		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- bob gas projectcapsule.dev,capsule.clastix.io \
-		&& mv bob-gas.kubeconfig bob.kubeconfig \
-		&& KUBECONFIG=bob.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data $$(cat $(ROOTCA) | base64 |tr -d '\n') \
-		&& KUBECONFIG=bob.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
-		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- joe gas projectcapsule.dev,capsule.clastix.io,foo.clastix.io \
-		&& mv joe-gas.kubeconfig foo.clastix.io.kubeconfig \
-		&& KUBECONFIG=foo.clastix.io.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data $$(cat $(ROOTCA) | base64 |tr -d '\n') \
-		&& KUBECONFIG=foo.clastix.io.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
-		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- dave soil projectcapsule.dev,capsule.clastix.io,bar.clastix.io \
-		&& mv dave-soil.kubeconfig dave.kubeconfig \
-		&& kubectl --kubeconfig=dave.kubeconfig config set clusters.kind-capsule.certificate-authority-data $$(cat $(ROOTCA) | base64 |tr -d '\n') \
-		&& kubectl --kubeconfig=dave.kubeconfig config set clusters.kind-capsule.server https://127.0.0.1:9001
 	@echo "Installing Capsule-Proxy using HELM..."
 	@helm upgrade --install capsule-proxy ./charts/capsule-proxy -n capsule-system \
 		--set "image.pullPolicy=Never" \
 		--set "image.tag=$(VERSION)" \
 		--set "options.logLevel=10" \
 		--set "options.pprof=true" \
+		--set "options.leaderElection=true" \
 		--set "service.type=NodePort" \
-		--set "service.nodePort=" \
 		--set "kind=DaemonSet" \
 		--set "daemonset.hostNetwork=true" \
 		--set "serviceMonitor.enabled=false" \
-		--set "webhooks.enabled=true" \
-		--set "options.extraArgs={--feature-gates=ProxyClusterScoped=true,--feature-gates=ProxyAllNamespaced=true}"
+		--set "options.generateCertificates=false" \
+		--set "certManager.certificate.ipAddresses={127.0.0.1}" \
+		--set "options.extraArgs={--feature-gates=ProxyAllNamespaced=true}"
 endif
 	@kubectl rollout restart ds capsule-proxy -n capsule-system || true
+	$(MAKE) generate-kubeconfigs
+
+generate-kubeconfigs:
+	CA_B64=$$(kubectl -n capsule-system get secret capsule-proxy-root-secret -o jsonpath='{.data.ca\.crt}') ; \
+	if [ -z "$$CA_B64" ]; then \
+	  echo "ERROR: secret capsule-system/capsule-proxy-root-secret missing .data[ca.crt]" ; \
+	  exit 1 ; \
+	fi;
+	@cd hack \
+		&& CA_B64=$$(kubectl -n capsule-system get secret capsule-proxy-root-secret -o jsonpath='{.data.ca\.crt}') \
+		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- alice oil projectcapsule.dev,capsule.clastix.io \
+		&& mv alice-oil.kubeconfig alice.kubeconfig \
+		&& KUBECONFIG=alice.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data "$$CA_B64"  \
+		&& KUBECONFIG=alice.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
+		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- bob gas projectcapsule.dev,capsule.clastix.io \
+		&& mv bob-gas.kubeconfig bob.kubeconfig \
+		&& KUBECONFIG=bob.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data "$$CA_B64" \
+		&& KUBECONFIG=bob.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
+		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- joe gas projectcapsule.dev,capsule.clastix.io,foo.clastix.io \
+		&& mv joe-gas.kubeconfig joe.kubeconfig \
+		&& KUBECONFIG=joe.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data "$$CA_B64" \
+		&& KUBECONFIG=joe.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
+	    && curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- cluster-admin admin \
+		&& mv cluster-admin-admin.kubeconfig cluster-admin.kubeconfig \
+		&& KUBECONFIG=cluster-admin.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data "$$CA_B64" \
+		&& KUBECONFIG=cluster-admin.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
+		&& $(KUBECTL) create clusterrolebinding custom-cluster-admin --clusterrole=cluster-admin --user=cluster-admin \
+		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- dave soil projectcapsule.dev,capsule.clastix.io,bar.clastix.io \
+		&& mv dave-soil.kubeconfig dave.kubeconfig \
+		&& kubectl --kubeconfig=dave.kubeconfig config set clusters.kind-capsule.certificate-authority-data "$$CA_B64" \
+		&& kubectl --kubeconfig=dave.kubeconfig config set clusters.kind-capsule.server https://127.0.0.1:9001
 
 install-dependencies:
 	@$(KUBECTL) kustomize e2e/distro/flux/ | kubectl apply --force-conflicts --server-side=true -f -
@@ -266,6 +279,9 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 golint: golangci-lint ## Linting the code according to the styling guide.
 	$(GOLANGCI_LINT) run -c .golangci.yml
 
+golint-fix: golangci-lint ## Linting the code according to the styling guide.
+	$(GOLANGCI_LINT) run -c .golangci.yml --fix
+
 .PHONY: install
 install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/config.
 	kubectl apply -f charts/capsule-proxy/crds
@@ -288,7 +304,7 @@ $(LOCALBIN):
 
 HELM_SCHEMA_VERSION   := ""
 helm-plugin-schema:
-	@$(HELM) plugin install https://github.com/losisin/helm-values-schema-json.git --version $(HELM_SCHEMA_VERSION) || true
+	@$(HELM) plugin install https://github.com/losisin/helm-values-schema-json.git --verify=false --version $(HELM_SCHEMA_VERSION) || true
 
 HELM_DOCS         := $(LOCALBIN)/helm-docs
 HELM_DOCS_VERSION := v1.14.1
@@ -301,14 +317,14 @@ helm-doc:
 # -- Tools
 ####################
 CONTROLLER_GEN         := $(LOCALBIN)/controller-gen
-CONTROLLER_GEN_VERSION ?= v0.18.0
+CONTROLLER_GEN_VERSION ?= v0.20.0
 CONTROLLER_GEN_LOOKUP  := kubernetes-sigs/controller-tools
 controller-gen:
 	@test -s $(CONTROLLER_GEN) && $(CONTROLLER_GEN) --version | grep -q $(CONTROLLER_GEN_VERSION) || \
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION))
 
 GINKGO         := $(LOCALBIN)/ginkgo
-GINKGO_VERSION := v2.23.4
+GINKGO_VERSION := v2.27.2
 GINKGO_LOOKUP  := onsi/ginkgo
 ginkgo: ## Download ginkgo locally if necessary.
 	$(call go-install-tool,$(GINKGO),github.com/$(GINKGO_LOOKUP)/v2/ginkgo@$(GINKGO_VERSION))
@@ -320,32 +336,39 @@ mkcert: ## Download mkcert locally if necessary.
 	$(call go-install-tool,$(MKCERT),filippo.io/mkcert@$(MKCERT_VERSION))
 
 CT         := $(LOCALBIN)/ct
-CT_VERSION := v3.12.0
+CT_VERSION := v3.14.0
 CT_LOOKUP  := helm/chart-testing
 ct:
 	@test -s $(CT) && $(CT) version | grep -q $(CT_VERSION) || \
 	$(call go-install-tool,$(CT),github.com/$(CT_LOOKUP)/v3/ct@$(CT_VERSION))
 
 KIND         := $(LOCALBIN)/kind
-KIND_VERSION := v0.28.0
+KIND_VERSION := v0.31.0
 KIND_LOOKUP  := kubernetes-sigs/kind
 kind:
 	@test -s $(KIND) && $(KIND) --version | grep -q $(KIND_VERSION) || \
 	$(call go-install-tool,$(KIND),sigs.k8s.io/kind/cmd/kind@$(KIND_VERSION))
 
 KO           := $(LOCALBIN)/ko
-KO_VERSION   := v0.18.0
+KO_VERSION   := v0.18.1
 KO_LOOKUP    := google/ko
 ko:
 	@test -s $(KO) && $(KO) -h | grep -q $(KO_VERSION) || \
 	$(call go-install-tool,$(KO),github.com/$(KO_LOOKUP)@$(KO_VERSION))
 
+NWA           := $(LOCALBIN)/nwa
+NWA_VERSION   := v0.7.7
+NWA_LOOKUP    := B1NARY-GR0UP/nwa
+nwa:
+	@test -s $(NWA) && $(NWA) -h | grep -q $(NWA_VERSION) || \
+	$(call go-install-tool,$(NWA),github.com/$(NWA_LOOKUP)@$(NWA_VERSION))
+
 GOLANGCI_LINT          := $(LOCALBIN)/golangci-lint
-GOLANGCI_LINT_VERSION  := v1.64.8
+GOLANGCI_LINT_VERSION  := v2.4.0
 GOLANGCI_LINT_LOOKUP   := golangci/golangci-lint
 golangci-lint: ## Download golangci-lint locally if necessary.
 	@test -s $(GOLANGCI_LINT) && $(GOLANGCI_LINT) -h | grep -q $(GOLANGCI_LINT_VERSION) || \
-	$(call go-install-tool,$(GOLANGCI_LINT),github.com/$(GOLANGCI_LINT_LOOKUP)/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION))
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/$(GOLANGCI_LINT_LOOKUP)/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION))
 
 # go-install-tool will 'go install' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))

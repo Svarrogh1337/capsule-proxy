@@ -1,4 +1,4 @@
-// Copyright 2020-2023 Project Capsule Authors.
+// Copyright 2020-2025 Project Capsule Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package webserver
@@ -8,11 +8,14 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/textproto"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,44 +25,51 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
+	capsuleapi "github.com/projectcapsule/capsule/pkg/api"
 	"golang.org/x/net/http/httpguts"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/runtime/serializer/protobuf"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authentication/serviceaccount"
 	"k8s.io/client-go/discovery"
 	"k8s.io/component-base/featuregate"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/projectcapsule/capsule-proxy/api/v1beta1"
+	"github.com/projectcapsule/capsule-proxy/internal/authorization"
 	"github.com/projectcapsule/capsule-proxy/internal/controllers"
-	"github.com/projectcapsule/capsule-proxy/internal/controllers/watchdog"
-	"github.com/projectcapsule/capsule-proxy/internal/features"
 	"github.com/projectcapsule/capsule-proxy/internal/indexer"
 	"github.com/projectcapsule/capsule-proxy/internal/modules"
 	"github.com/projectcapsule/capsule-proxy/internal/modules/clusterscoped"
 	moderrors "github.com/projectcapsule/capsule-proxy/internal/modules/errors"
-	"github.com/projectcapsule/capsule-proxy/internal/modules/ingressclass"
-	"github.com/projectcapsule/capsule-proxy/internal/modules/lease"
 	"github.com/projectcapsule/capsule-proxy/internal/modules/metric"
 	"github.com/projectcapsule/capsule-proxy/internal/modules/namespace"
 	"github.com/projectcapsule/capsule-proxy/internal/modules/namespaced"
 	"github.com/projectcapsule/capsule-proxy/internal/modules/node"
-	"github.com/projectcapsule/capsule-proxy/internal/modules/persistentvolume"
-	"github.com/projectcapsule/capsule-proxy/internal/modules/pod"
-	"github.com/projectcapsule/capsule-proxy/internal/modules/priorityclass"
-	"github.com/projectcapsule/capsule-proxy/internal/modules/runtimeclass"
-	"github.com/projectcapsule/capsule-proxy/internal/modules/storageclass"
 	"github.com/projectcapsule/capsule-proxy/internal/modules/tenants"
 	"github.com/projectcapsule/capsule-proxy/internal/options"
 	req "github.com/projectcapsule/capsule-proxy/internal/request"
 	"github.com/projectcapsule/capsule-proxy/internal/tenant"
+	"github.com/projectcapsule/capsule-proxy/internal/utils"
 	server "github.com/projectcapsule/capsule-proxy/internal/webserver/errors"
 	"github.com/projectcapsule/capsule-proxy/internal/webserver/middleware"
 )
 
-func NewKubeFilter(opts options.ListenerOpts, srv options.ServerOptions, gates featuregate.FeatureGate, rbReflector *controllers.RoleBindingReflector, clientOverride client.Reader, client client.Client) (Filter, error) {
+func NewKubeFilter(
+	opts options.ListenerOpts,
+	srv options.ServerOptions,
+	gates featuregate.FeatureGate,
+	rbReflector *controllers.RoleBindingReflector,
+	clientOverride client.Reader,
+	mgr ctrl.Manager,
+) (Filter, error) {
 	reverseProxy := httputil.NewSingleHostReverseProxy(opts.KubernetesControlPlaneURL())
 	reverseProxy.FlushInterval = time.Millisecond * 100
 
@@ -70,11 +80,28 @@ func NewKubeFilter(opts options.ListenerOpts, srv options.ServerOptions, gates f
 
 	reverseProxy.Transport = reverseProxyTransport
 
+	scheme := runtime.NewScheme()
+	protoEncoder := protobuf.NewSerializer(scheme, scheme)
+
+	err = corev1.AddToScheme(scheme)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot add corev1 to scheme")
+	}
+
+	err = authorizationv1.AddToScheme(scheme)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot add authorizationv1 to scheme")
+	}
+
+	codecFactory := serializer.NewCodecFactory(scheme)
+	universalDecoder := codecFactory.UniversalDeserializer()
+
 	return &kubeFilter{
+		mgr:                        mgr,
 		gates:                      gates,
 		reader:                     clientOverride,
-		writer:                     client,
-		managerReader:              client,
+		writer:                     mgr.GetClient(),
+		managerReader:              mgr.GetClient(),
 		allowedPaths:               sets.New("/api", "/apis", "/version"),
 		authTypes:                  opts.AuthTypes(),
 		ignoredUserGroups:          sets.New(opts.IgnoredGroupNames()...),
@@ -89,10 +116,14 @@ func NewKubeFilter(opts options.ListenerOpts, srv options.ServerOptions, gates f
 		serverOptions:              srv,
 		log:                        ctrl.Log.WithName("proxy"),
 		roleBindingsReflector:      rbReflector,
+		protoEncoder:               protoEncoder,
+		universalDecoder:           universalDecoder,
+		scheme:                     scheme,
 	}, nil
 }
 
 type kubeFilter struct {
+	mgr                        ctrl.Manager
 	allowedPaths               sets.Set[string]
 	authTypes                  []req.AuthType
 	ignoredUserGroups          sets.Set[string]
@@ -111,6 +142,112 @@ type kubeFilter struct {
 
 	managerReader, reader client.Reader
 	writer                client.Writer
+	protoEncoder          *protobuf.Serializer
+	universalDecoder      runtime.Decoder
+	scheme                *runtime.Scheme
+}
+
+// NeedLeaderElection starts the proxy (webserver) independently of controller manager
+// This allows distributing the load among all pods, even if they are not leaders.
+func (n *kubeFilter) NeedLeaderElection() bool {
+	return false
+}
+
+//nolint:funlen
+func (n *kubeFilter) Start(ctx context.Context) error {
+	r := mux.NewRouter()
+	r.Use(handlers.RecoveryHandler())
+
+	r.Path("/_healthz").Subrouter().HandleFunc("", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("ok"))
+	})
+
+	root := r.PathPrefix("").Subrouter()
+	n.registerModules(ctx, root)
+	root.Use(
+		n.authorizationMiddleware,
+		n.reverseProxyMiddleware,
+		middleware.LoggerMiddleware(n.log),
+		middleware.CheckPaths(n.log, n.allowedPaths, n.impersonateHandler),
+		middleware.CheckJWTMiddleware(n.writer),
+	)
+	root.PathPrefix("/").HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		n.impersonateHandler(writer, request)
+	})
+	// cert-watcher integration:
+	// extracting the GetCertificate function for hot reload upon certificate update.
+	// This will be used only if the proxy is set to bare TLS mode.
+	var getCertificateFn func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
+	if n.serverOptions.IsListeningTLS() {
+		watcher, watcherErr := certwatcher.New(n.serverOptions.TLSCertificatePath(), n.serverOptions.TLSCertificateKeyPath())
+		if watcherErr != nil {
+			return fmt.Errorf("cannot create certificate watcher: %w", watcherErr)
+		}
+
+		getCertificateFn = watcher.GetCertificate
+
+		go func() {
+			if startErr := watcher.Start(ctx); startErr != nil {
+				panic(fmt.Errorf("cannot start certificate watcher: %w", startErr))
+			}
+		}()
+	}
+
+	var srv *http.Server
+
+	go func() {
+		var err error
+
+		addr := fmt.Sprintf("0.0.0.0:%d", n.serverOptions.ListeningPort())
+
+		if n.serverOptions.IsListeningTLS() {
+			tlsConfig := &tls.Config{
+				ClientCAs:      n.serverOptions.GetCertificateAuthorityPool(),
+				GetCertificate: getCertificateFn,
+				MinVersion:     tls.VersionTLS12,
+			}
+
+			for _, authType := range n.authTypes {
+				if authType == req.TLSCertificate {
+					tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+
+					break
+				}
+			}
+
+			srv = &http.Server{
+				Handler:           r,
+				Addr:              addr,
+				TLSConfig:         tlsConfig,
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+
+			ln, lnErr := tls.Listen("tcp", addr, tlsConfig)
+			if lnErr != nil {
+				panic("cannot create listener: " + lnErr.Error())
+			}
+
+			err = srv.Serve(ln)
+		} else {
+			srv = &http.Server{
+				Handler:           r,
+				Addr:              addr,
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+
+			err = srv.ListenAndServe()
+		}
+
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	<-ctx.Done()
+
+	return srv.Shutdown(ctx)
 }
 
 func (n *kubeFilter) LivenessProbe(*http.Request) error {
@@ -158,12 +295,94 @@ func (n *kubeFilter) ReadinessProbe(req *http.Request) (err error) {
 	return nil
 }
 
+func (n *kubeFilter) BearerToken() string {
+	if time.Now().After(n.bearerTokenExpirationTime) {
+		n.log.V(5).Info("Token expired. Reading new token from file", "token", n.bearerToken, "token file", n.bearerTokenFile)
+		token, _ := os.ReadFile(n.bearerTokenFile)
+		n.bearerToken = string(token)
+		n.bearerTokenExpirationTime = bearerExpirationTime(string(token))
+	}
+
+	return n.bearerToken
+}
+
 func (n *kubeFilter) reverseProxyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		next.ServeHTTP(writer, request)
 
 		n.log.V(5).Info("debugging request", "uri", request.RequestURI, "method", request.Method)
 		n.reverseProxy.ServeHTTP(writer, request)
+	})
+}
+
+func (n *kubeFilter) authorizationMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !slices.Contains(authorization.Paths, request.URL.Path) {
+			next.ServeHTTP(writer, request)
+
+			return
+		}
+
+		w := httptest.NewRecorder()
+		next.ServeHTTP(w, request)
+
+		body, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			n.log.Error(err, "cannot read response body")
+
+			return
+		}
+
+		proxyRequest := req.NewHTTP(request, n.authTypes, n.usernameClaimField, n.writer, n.ignoredImpersonationGroups, n.impersonationGroupsRegexp, n.skipImpersonationReview)
+
+		username, groups, err := proxyRequest.GetUserAndGroups()
+		if err != nil {
+			server.HandleError(writer, err, "cannot retrieve user and group from the request")
+		}
+
+		proxyTenants, err := n.getTenantsForOwner(request.Context(), username, groups)
+		if err != nil {
+			server.HandleError(writer, err, "cannot list Tenant resources")
+		}
+
+		obj, gvk, err := n.universalDecoder.Decode(body, nil, nil)
+		if err != nil {
+			n.log.Error(err, "cannot decode authorization object")
+		}
+
+		err = authorization.MutateAuthorization(proxyTenants, &obj, *gvk)
+		if err != nil {
+			n.log.Error(err, "cannot mutate authorization object")
+		}
+
+		if request.Header.Get("Content-Type") == "application/json" {
+			body, err = utils.JsonEncode(obj, n.scheme)
+			if err != nil {
+				n.log.Error(err, "cannot marshal Authorization object to json")
+			}
+		} else if request.Header.Get("Content-Type") == "application/vnd.kubernetes.protobuf" {
+			body, err = runtime.Encode(n.protoEncoder, obj)
+			if err != nil {
+				n.log.Error(err, "cannot marshal Authorization object to protobuf")
+			}
+		}
+
+		for k, v := range w.Result().Header {
+			if k == "Content-Length" {
+				continue
+			}
+
+			for _, sv := range v {
+				writer.Header().Add(k, sv)
+			}
+		}
+
+		writer.WriteHeader(w.Result().StatusCode)
+
+		write, err := writer.Write(body)
+		if err != nil {
+			n.log.Error(err, "cannot write mutated authorization object to response", "bytesWritten", write)
+		}
 	})
 }
 
@@ -187,7 +406,7 @@ func (n *kubeFilter) handleRequest(request *http.Request, selector labels.Select
 	request.URL.RawQuery = q.Encode()
 
 	if len(n.BearerToken()) > 0 {
-		n.log.V(4).Info("Updating the token", "token", n.BearerToken())
+		n.log.V(10).Info("Updating the token", "token", n.BearerToken())
 		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", n.BearerToken()))
 	}
 }
@@ -233,63 +452,42 @@ func (n *kubeFilter) registerModules(ctx context.Context, root *mux.Router) {
 		namespace.Get(n.roleBindingsReflector, n.reader),
 		tenants.List(),
 		tenants.Get(n.reader),
+		// Node and metric modules are kept as dedicated modules
+		// since they rely on Tenant.Spec.NodeSelector matching
+		node.List(n.reader),
+		node.Get(n.reader),
+		metric.Get(n.reader),
+		metric.List(n.reader),
 	}
 
 	// Discovery client
 	discoveryClient := discovery.NewDiscoveryClientForConfigOrDie(ctrl.GetConfigOrDie())
 
-	// When the ProxyClusterScoped flag is enabled
-	// we are no longer respecting legacy proxysettings
-	if n.gates.Enabled(features.ProxyClusterScoped) {
-		apis, err := serverPreferredResources(discoveryClient)
-		if err != nil {
-			panic(err)
-		}
+	// Use the generic cluster scoped module for all remaining cluster-scoped resources.
+	// Resources already handled by dedicated modules above (namespaces, tenants, nodes, metrics)
+	// are skipped via moduleGroupKindPresent.
+	apis, err := serverPreferredResources(discoveryClient)
+	if err != nil {
+		panic(err)
+	}
 
-		for _, api := range apis {
-			if !moduleGroupKindPresent(modList, api) {
-				n.log.V(6).Info("adding generic cluster scoped resource", "url", api.Path())
-				modList = append(modList, clusterscoped.List(n.reader, n.writer, api.Path()))
-				modList = append(modList, clusterscoped.Get(discoveryClient, n.reader, n.writer, api.ResourcePath()))
-			}
+	for _, api := range apis {
+		if !moduleGroupKindPresent(modList, api) {
+			n.log.V(6).Info("adding generic cluster scoped resource", "url", api.Path())
+			modList = append(modList, clusterscoped.List(n.reader, n.writer, api.Path()))
+			modList = append(modList, clusterscoped.Get(discoveryClient, n.reader, n.writer, api.ResourcePath()))
 		}
-	} else {
-		// Adds all legacy routes
-		modList = append(modList, []modules.Module{
-			node.List(n.reader),
-			node.Get(n.reader),
-			ingressclass.List(n.reader),
-			ingressclass.Get(n.reader),
-			storageclass.Get(n.reader),
-			storageclass.List(n.reader),
-			priorityclass.List(n.reader),
-			priorityclass.Get(n.reader),
-			runtimeclass.Get(n.reader),
-			runtimeclass.List(n.reader),
-			persistentvolume.Get(n.reader),
-			persistentvolume.List(n.reader),
-			metric.Get(n.reader),
-			metric.List(n.reader),
-		}...,
-		)
 	}
 
 	// Get all API group resources
-	if n.gates.Enabled(features.ProxyAllNamespaced) {
-		apis, err := watchdog.API(ctrl.GetConfigOrDie())
-		if err != nil {
-			panic(err)
-		}
+	apis, err = discoverAPI(ctrl.GetConfigOrDie())
+	if err != nil {
+		panic(err)
+	}
 
-		for _, api := range apis {
-			n.log.V(6).Info("adding generic namespaced resource", "url", api.Path())
-			modList = append(modList, namespaced.CatchAll(n.reader, n.writer, api.Path()))
-		}
-	} else {
-		// Register legacy namespaced modules only when featureGate ProxyAllNamespaced is not active.
-		// This is to avoid registering the same resources twice and having different behaviors on these apis.
-		modList = append(modList, pod.Get(n.reader))
-		modList = append(modList, lease.Get(n.reader))
+	for _, api := range apis {
+		n.log.V(6).Info("adding generic namespaced resource", "url", api.Path())
+		modList = append(modList, namespaced.CatchAll(n.reader, n.writer, api.Path()))
 	}
 
 	for _, i := range modList {
@@ -321,12 +519,17 @@ func (n *kubeFilter) registerModules(ctx context.Context, root *mux.Router) {
 			}
 
 			var selector labels.Selector
+
 			selector, err = mod.Handle(proxyTenants, proxyRequest)
 
 			switch {
 			case err != nil:
 				var t moderrors.Error
 				if errors.As(err, &t) {
+					if t.Status().Code > 0 {
+						writer.WriteHeader(int(t.Status().Code))
+					}
+
 					writer.Header().Set("Content-Type", "application/json")
 
 					b, _ := json.Marshal(t.Status())
@@ -346,82 +549,14 @@ func (n *kubeFilter) registerModules(ctx context.Context, root *mux.Router) {
 	}
 }
 
-//nolint:funlen
-func (n *kubeFilter) Start(ctx context.Context) error {
-	r := mux.NewRouter()
-	r.Use(handlers.RecoveryHandler())
-
-	r.Path("/_healthz").Subrouter().HandleFunc("", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusOK)
-		_, _ = writer.Write([]byte("ok"))
-	})
-
-	root := r.PathPrefix("").Subrouter()
-	n.registerModules(ctx, root)
-	root.Use(
-		n.reverseProxyMiddleware,
-		middleware.CheckPaths(n.log, n.allowedPaths, n.impersonateHandler),
-		middleware.CheckJWTMiddleware(n.writer),
-	)
-	root.PathPrefix("/").HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		n.impersonateHandler(writer, request)
-	})
-
-	var srv *http.Server
-
-	go func() {
-		var err error
-
-		addr := fmt.Sprintf("0.0.0.0:%d", n.serverOptions.ListeningPort())
-
-		if n.serverOptions.IsListeningTLS() {
-			tlsConfig := &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				ClientCAs:  n.serverOptions.GetCertificateAuthorityPool(),
-			}
-
-			for _, authType := range n.authTypes {
-				if authType == req.TLSCertificate {
-					tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-
-					break
-				}
-			}
-
-			srv = &http.Server{
-				Handler:           r,
-				Addr:              addr,
-				TLSConfig:         tlsConfig,
-				ReadHeaderTimeout: 5 * time.Second,
-			}
-			err = srv.ListenAndServeTLS(n.serverOptions.TLSCertificatePath(), n.serverOptions.TLSCertificateKeyPath())
-		} else {
-			srv = &http.Server{
-				Handler:           r,
-				Addr:              addr,
-				ReadHeaderTimeout: 5 * time.Second,
-			}
-			err = srv.ListenAndServe()
-		}
-
-		if err != nil {
-			panic(err)
-		}
-	}()
-
-	<-ctx.Done()
-
-	return srv.Shutdown(ctx)
-}
-
 func (n *kubeFilter) getTenantsForOwner(ctx context.Context, username string, groups []string) (proxyTenants []*tenant.ProxyTenant, err error) {
 	if strings.HasPrefix(username, serviceaccount.ServiceAccountUsernamePrefix) {
-		proxyTenants, err = n.getProxyTenantsForOwnerKind(ctx, capsulev1beta2.ServiceAccountOwner, username)
+		proxyTenants, err = n.getProxyTenantsForOwnerKind(ctx, capsuleapi.ServiceAccountOwner, username)
 		if err != nil {
 			return nil, fmt.Errorf("cannot get Tenants slice owned by Tenant Owner: %w", err)
 		}
 	} else {
-		proxyTenants, err = n.getProxyTenantsForOwnerKind(ctx, capsulev1beta2.UserOwner, username)
+		proxyTenants, err = n.getProxyTenantsForOwnerKind(ctx, capsuleapi.UserOwner, username)
 		if err != nil {
 			return nil, fmt.Errorf("cannot get Tenants slice owned by Tenant Owner: %w", err)
 		}
@@ -429,7 +564,7 @@ func (n *kubeFilter) getTenantsForOwner(ctx context.Context, username string, gr
 
 	// Find tenants belonging to a group
 	for _, group := range groups {
-		pt, err := n.getProxyTenantsForOwnerKind(ctx, capsulev1beta2.GroupOwner, group)
+		pt, err := n.getProxyTenantsForOwnerKind(ctx, capsuleapi.GroupOwner, group)
 		if err != nil {
 			return nil, fmt.Errorf("cannot get Tenants slice owned by Tenant Owner: %w", err)
 		}
@@ -440,31 +575,14 @@ func (n *kubeFilter) getTenantsForOwner(ctx context.Context, username string, gr
 	return
 }
 
-func (n *kubeFilter) ownerFromCapsuleToProxySetting(owners capsulev1beta2.OwnerListSpec) []v1beta1.OwnerSpec {
-	out := make([]v1beta1.OwnerSpec, 0, len(owners))
-
-	for _, owner := range owners {
-		out = append(out, v1beta1.OwnerSpec{
-			Kind:            owner.Kind,
-			Name:            owner.Name,
-			ProxyOperations: owner.ProxyOperations,
-		})
-	}
-
-	return out
-}
-
 //nolint:funlen
-func (n *kubeFilter) getProxyTenantsForOwnerKind(ctx context.Context, ownerKind capsulev1beta2.OwnerKind, ownerName string) (proxyTenants []*tenant.ProxyTenant, err error) {
-	//nolint:prealloc
-	var tenants []string
-
+func (n *kubeFilter) getProxyTenantsForOwnerKind(ctx context.Context, ownerKind capsuleapi.OwnerKind, ownerName string) (proxyTenants []*tenant.ProxyTenant, err error) {
 	ownerIndexValue := fmt.Sprintf("%s:%s", ownerKind.String(), ownerName)
 
 	tl := &capsulev1beta2.TenantList{}
 
 	f := client.MatchingFields{
-		".spec.owner.ownerkind": ownerIndexValue,
+		indexer.TenantOwnerKindField: ownerIndexValue,
 	}
 	if err = n.managerReader.List(ctx, tl, f); err != nil {
 		return nil, fmt.Errorf("cannot retrieve Tenants list: %w", err)
@@ -491,29 +609,28 @@ func (n *kubeFilter) getProxyTenantsForOwnerKind(ctx context.Context, ownerKind 
 			continue
 		}
 
-		proxyTenants = append(proxyTenants, tenant.NewProxyTenant(ownerName, ownerKind, tntList.Items[0], proxySetting.Spec.Subjects))
+		proxyTenants = append(proxyTenants, tenant.NewProxyTenant(tntList.Items[0], ownerName, ownerKind, proxySetting.Spec.Subjects))
 	}
 
 	// Consider Global ProxySettings
-	// Only consider GlobalProxySettings if the feature gate is enabled
-	if n.gates.Enabled(features.ProxyClusterScoped) {
-		globalProxySettings := &v1beta1.GlobalProxySettingsList{}
-		if err = n.managerReader.List(ctx, globalProxySettings, client.MatchingFields{indexer.GlobalKindField: ownerIndexValue}); err != nil {
-			n.log.Error(err, "cannot retrieve GlobalProxySettings", "owner", ownerKind, "name", ownerName)
-		}
-		// Convert GlobalProxySettings to TenantProxies
-		for _, globalProxySetting := range globalProxySettings.Items {
-			n.log.V(10).Info("Converting GlobalProxySettings", "Setting", globalProxySetting.Name)
+	globalProxySettings := &v1beta1.GlobalProxySettingsList{}
+	if err = n.managerReader.List(ctx, globalProxySettings, client.MatchingFields{indexer.GlobalKindField: ownerIndexValue}); err != nil {
+		n.log.Error(err, "cannot retrieve GlobalProxySettings", "owner", ownerKind, "name", ownerName)
+	}
+	// Convert GlobalProxySettings to TenantProxies
+	for _, globalProxySetting := range globalProxySettings.Items {
+		n.log.V(10).Info("Converting GlobalProxySettings", "Setting", globalProxySetting.Name)
 
-			tProxy := tenant.NewClusterProxy(ownerName, ownerKind, globalProxySetting.Spec.Rules)
-			proxyTenants = append(proxyTenants, tProxy)
-		}
-
-		n.log.V(10).Info("Collected GlobalProxySettings", "owner", ownerKind, "name", ownerName, "settings", len(globalProxySettings.Items))
+		tProxy := tenant.NewClusterProxy(ownerName, ownerKind, globalProxySetting.Spec.Rules)
+		proxyTenants = append(proxyTenants, tProxy)
 	}
 
+	n.log.V(10).Info("Collected GlobalProxySettings", "owner", ownerKind, "name", ownerName, "settings", len(globalProxySettings.Items))
+
+	tenants := make([]string, 0, len(tl.Items))
+
 	for _, t := range tl.Items {
-		proxyTenants = append(proxyTenants, tenant.NewProxyTenant(ownerName, ownerKind, t, n.ownerFromCapsuleToProxySetting(t.Spec.Owners)))
+		proxyTenants = append(proxyTenants, tenant.NewProxyTenant(t, ownerName, ownerKind, nil))
 		tenants = append(tenants, t.GetName())
 	}
 
@@ -547,22 +664,12 @@ func (n *kubeFilter) removingHopByHopHeaders(request *http.Request) {
 	request.Header.Del(connectionHeaderName)
 }
 
-func (n *kubeFilter) BearerToken() string {
-	if time.Now().After(n.bearerTokenExpirationTime) {
-		n.log.V(5).Info("Token expired. Reading new token from file", "token", n.bearerToken, "token file", n.bearerTokenFile)
-		token, _ := os.ReadFile(n.bearerTokenFile)
-		n.bearerToken = string(token)
-		n.bearerTokenExpirationTime = bearerExpirationTime(string(token))
-	}
-
-	return n.bearerToken
-}
-
 func bearerExpirationTime(tokenString string) time.Time {
 	token, _, _ := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
 	claims, _ := token.Claims.(jwt.MapClaims)
 
 	var mil int64
+
 	switch iat := claims["exp"].(type) {
 	case float64:
 		mil = int64(iat)

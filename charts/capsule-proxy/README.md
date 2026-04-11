@@ -95,28 +95,31 @@ If you only need to make minor customizations, you can specify them on the comma
 | global.jobs.certs.image.pullPolicy | string | `"IfNotPresent"` | Set the image pull policy of the post install certgen job |
 | global.jobs.certs.image.registry | string | `"registry.k8s.io"` | Set the image repository of the post install certgen job |
 | global.jobs.certs.image.repository | string | `"ingress-nginx/kube-webhook-certgen"` | Set the image repository of the post install certgen job |
-| global.jobs.certs.image.tag | string | `"v1.5.3"` | Set the image tag of the post install certgen job |
+| global.jobs.certs.image.tag | string | `"v1.6.7"` | Set the image tag of the post install certgen job |
 | global.jobs.certs.nodeSelector | object | `{}` | Set the node selector |
-| global.jobs.certs.podSecurityContext | object | `{"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the job pods. |
+| global.jobs.certs.podSecurityContext | object | `{"enabled":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the job pods. |
 | global.jobs.certs.priorityClassName | string | `""` | Set a pod priorityClassName |
 | global.jobs.certs.resources | object | `{}` | Job resources |
 | global.jobs.certs.restartPolicy | string | `"Never"` | Set the restartPolicy |
-| global.jobs.certs.securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":1002,"runAsNonRoot":true,"runAsUser":1002}` | Security context for the job containers. |
+| global.jobs.certs.securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"enabled":true,"readOnlyRootFilesystem":true,"runAsGroup":1002,"runAsNonRoot":true,"runAsUser":1002}` | Security context for the job containers. |
 | global.jobs.certs.tolerations | list | `[]` | Set list of tolerations |
 | global.jobs.certs.topologySpreadConstraints | list | `[]` | Set Topology Spread Constraints |
 | global.jobs.certs.ttlSecondsAfterFinished | int | `60` | Sets the ttl in seconds after a finished certgen job is deleted. Set to -1 to never delete. |
 | global.jobs.kubectl.affinity | object | `{}` | Set affinity rules |
-| global.jobs.kubectl.annotations | object | `{}` | Annotations |
+| global.jobs.kubectl.annotations | object | `{}` | Annotations to add to the job. |
 | global.jobs.kubectl.image.pullPolicy | string | `"IfNotPresent"` | Set the image pull policy of the helm chart job |
 | global.jobs.kubectl.image.registry | string | `"docker.io"` | Set the image repository of the helm chart job |
 | global.jobs.kubectl.image.repository | string | `"clastix/kubectl"` | Set the image repository of the helm chart job |
 | global.jobs.kubectl.image.tag | string | `""` | Set the image tag of the helm chart job |
+| global.jobs.kubectl.labels | object | `{}` | Labels to add to the job. |
 | global.jobs.kubectl.nodeSelector | object | `{}` | Set the node selector |
-| global.jobs.kubectl.podSecurityContext | object | `{"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the job pods. |
+| global.jobs.kubectl.podAnnotations | object | `{}` | Annotations to add to the job pod |
+| global.jobs.kubectl.podLabels | object | `{}` | Labels to add to the job pod |
+| global.jobs.kubectl.podSecurityContext | object | `{"enabled":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the job pods. |
 | global.jobs.kubectl.priorityClassName | string | `""` | Set a pod priorityClassName |
 | global.jobs.kubectl.resources | object | `{}` | Job resources |
 | global.jobs.kubectl.restartPolicy | string | `"Never"` | Set the restartPolicy |
-| global.jobs.kubectl.securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":1002,"runAsNonRoot":true,"runAsUser":1002}` | Security context for the job containers. |
+| global.jobs.kubectl.securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"enabled":true,"readOnlyRootFilesystem":true,"runAsGroup":1002,"runAsNonRoot":true,"runAsUser":1002}` | Security context for the job containers. |
 | global.jobs.kubectl.tolerations | list | `[]` | Set list of tolerations |
 | global.jobs.kubectl.topologySpreadConstraints | list | `[]` | Set Topology Spread Constraints |
 | global.jobs.kubectl.ttlSecondsAfterFinished | int | `60` | Sets the ttl in seconds after a finished certgen job is deleted. Set to -1 to never delete. |
@@ -133,7 +136,9 @@ If you only need to make minor customizations, you can specify them on the comma
 | daemonset.hostNetwork | bool | `false` | Use the host network namespace for capsule-proxy pod. |
 | daemonset.hostPort | bool | `false` | Binding the capsule-proxy listening port to the host port. |
 | env | list | `[]` | Additional environment variables |
+| extraManifests | list | `[]` | Array of additional resources to be created alongside Capsule-Proxy helm chart |
 | hostNetwork | bool | `false` | When deployed as DaemonSet use |
+| hostUsers | bool | `true` | Don't use Host Users (User Namespaces) |
 | image.pullPolicy | string | `"IfNotPresent"` | Set the image pull policy. |
 | image.registry | string | `"ghcr.io"` | Set the image registry for capsule-proxy |
 | image.repository | string | `"projectcapsule/capsule-proxy"` | Set the image repository for capsule-proxy. |
@@ -145,9 +150,9 @@ If you only need to make minor customizations, you can specify them on the comma
 | nodeSelector | object | `{}` | Set the node selector for the capsule-proxy pod. |
 | podAnnotations | object | `{}` | Annotations to add to the capsule-proxy pod. |
 | podLabels | object | `{}` | Labels to add to the capsule-proxy pod. |
-| podSecurityContext | object | `{"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the capsule-proxy pod. |
+| podSecurityContext | object | `{"enabled":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the capsule-proxy pod. |
 | priorityClassName | string | `""` | Specifies PriorityClass of the capsule-proxy pod. |
-| rbac.clusterRole | string | `"cluster-admin"` | Controller ClusterRole |
+| rbac.clusterRole | string | `""` | Controller ClusterRole |
 | rbac.enabled | bool | `true` | Enable Creation of ClusterRoles |
 | readinessProbe | object | `{"enabled":true,"httpGet":{"path":"/readyz/","port":"probe","scheme":"HTTP"},"initialDelaySeconds":5}` | Proxy Readyness-Probe |
 | replicaCount | int | `1` | Set the replica count for capsule-proxy pod. |
@@ -156,7 +161,7 @@ If you only need to make minor customizations, you can specify them on the comma
 | resources.requests.cpu | string | `"200m"` | Set the CPU limits assigned to the controller. |
 | resources.requests.memory | string | `"128Mi"` | Set the memory limits assigned to the controller. |
 | restartPolicy | string | `"Always"` | Set the restartPolicy for the capsule-proxy pod. |
-| securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":1002,"runAsNonRoot":true,"runAsUser":1002}` | Security context for the capsule-proxy container. |
+| securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"enabled":true,"readOnlyRootFilesystem":true,"runAsGroup":1002,"runAsNonRoot":true,"runAsUser":1002}` | Security context for the capsule-proxy container. |
 | serviceAccount.annotations | object | `{}` | Annotations to add to the service account. |
 | serviceAccount.create | bool | `true` | Specifies whether a service account should be created. |
 | serviceAccount.name | string | `capsule-proxy` | The name of the service account to use. If not set and `serviceAccount.create=true`, a name is generated using the fullname template |
@@ -178,17 +183,18 @@ If you only need to make minor customizations, you can specify them on the comma
 | options.certificateVolumeName | string | `""` | Specify an override for the Secret containing the certificate for SSL. Default value is empty and referring to the generated certificate. |
 | options.clientConnectionBurst | int | `30` | Burst to use for interacting with kubernetes API Server. |
 | options.clientConnectionQPS | int | `20` | QPS to use for interacting with Kubernetes API Server. |
-| options.disableCaching | bool | `false` | Disable the go-client caching to hit directly the Kubernetes API Server, it disables any local caching as the rolebinding reflector |
+| options.disableCaching | bool | `false` | Disable the go-client caching to hit directly the Kubernetes API Server, it disables any local caching as the rolebinding reflector. |
 | options.enableSSL | bool | `true` | Specify if capsule-proxy will use SSL |
 | options.extraArgs | list | `[]` | A list of extra arguments to add to the capsule-proxy. |
-| options.generateCertificates | bool | `true` | Specify if capsule-proxy will generate self-signed SSL certificates |
+| options.generateCertificates | bool | `false` | Specify if capsule-proxy will generate self-signed SSL certificates |
 | options.ignoredUserGroups | list | `[]` | Define which groups must be ignored while proxying requests |
+| options.leaderElection | bool | `false` | Set leader election to true if you are running n-replicas |
 | options.listeningPort | int | `9001` | Set the listening port of the capsule-proxy |
-| options.logLevel | string | `"4"` | Set the log verbosity of the capsule-proxy with a value from 1 to 10 |
+| options.logLevel | int | `4` | Set the log verbosity of the capsule-proxy with a value from 1 to 10 |
 | options.oidcUsernameClaim | string | `"preferred_username"` | Specify if capsule-proxy will use SSL |
 | options.pprof | bool | `false` | Enable Pprof for profiling |
+| options.roleBindingReflector | bool | `false` | Enable the rolebinding reflector, which allows to list the namespaces, where a rolebinding mentions a user. |
 | options.rolebindingsResyncPeriod | string | `"10h"` | Set the role bindings reflector resync period, a local cache to store mappings between users and their namespaces. [Use a lower value in case of flaky etcd server connections.](https://github.com/projectcapsule/capsule-proxy/issues/174) |
-| options.webhookPort | int | `9443` | Webhook port |
 
 ### Cert-Manager Parameters
 
@@ -203,7 +209,7 @@ You can manage the certificate with the help of [cert-manager](https://cert-mana
 | certManager.certificate.uris | list | `[]` | Additional URIs to include in certificate |
 | certManager.externalCA.enabled | bool | `false` | Set if want cert manager to sign certificates with an external CA |
 | certManager.externalCA.secretName | string | `""` |  |
-| certManager.generateCertificates | bool | `false` | Set if the cert manager will generate SSL certificates (self-signed or CA-signed) |
+| certManager.generateCertificates | bool | `true` | Set if the cert manager will generate SSL certificates (self-signed or CA-signed) |
 | certManager.issuer.kind | string | `"Issuer"` | Set if the cert manager will generate either self-signed or CA signed SSL certificates. Its value will be either Issuer or ClusterIssuer |
 | certManager.issuer.name | string | `""` | Set the name of the ClusterIssuer if issuer kind is ClusterIssuer and if cert manager will generate CA signed SSL certificates |
 
@@ -221,11 +227,6 @@ You can manage the certificate with the help of [cert-manager](https://cert-mana
 | webhooks.service.namespace | string | `""` | Custom service namespace for the webhook service |
 | webhooks.service.port | string | `nil` | Custom service port for the webhook service |
 | webhooks.service.url | string | `""` | The URL where the capsule webhook services are running (Overwrites cluster scoped service definition) |
-| webhooks.watchdog.enabled | bool | `true` | Enable Watchdog Webhook |
-| webhooks.watchdog.failurePolicy | string | `"Ignore"` | Ignore failures from the webhook |
-| webhooks.watchdog.namespaceSelector | object | `{"matchExpressions":[{"key":"capsule.clastix.io/tenant","operator":"Exists"}]}` | Selects only namespaced items which are within a tenant |
-| webhooks.watchdog.rules | list | `[{"apiGroups":["*"],"apiVersions":["*"],"operations":["CREATE","UPDATE"],"resources":["*"],"scope":"Namespaced"}]` | Rules for which Objects and Actions this webhook should be called |
-| webhooks.watchdog.timeoutSeconds | string | `"3s"` | Timeout in seconds for mutating webhooks |
 
 ### Service Parameters
 
@@ -233,7 +234,7 @@ You can manage the certificate with the help of [cert-manager](https://cert-mana
 |-----|------|---------|-------------|
 | service.annotations | object | `{}` | Annotations to add to the service. |
 | service.labels | object | `{}` | Labels to add to the service. |
-| service.nodePort | string | `nil` | Specifies the node port number (only for `NodePort` service type). |
+| service.nodePort | int | `0` | Specifies the node port number (only for `NodePort` service type). |
 | service.port | int | `9001` | Specifies the service port number. |
 | service.portName | string | `"proxy"` | Specifies the service port name. |
 | service.type | string | `"ClusterIP"` | Specifies the service type should be created (`ClusterIP`, `NodePort`or `LoadBalancer`) |
@@ -280,6 +281,51 @@ You can manage the certificate with the help of [cert-manager](https://cert-mana
 | serviceMonitor.serviceAccount.name | string | `""` |  |
 | serviceMonitor.serviceAccount.namespace | string | `""` |  |
 | serviceMonitor.targetLabels | list | `[]` | Set targetLabels for the serviceMonitor |
+
+### Gangplank Parameters
+
+[Read More](https://projectcapsule.dev/docs/proxy/gangplank/)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| gangplank.affinity | object | `{}` | Set affinity rules |
+| gangplank.config | object | `{"apiServerURL":"https://apiserver.example.test","authorizeURL":"https://oauth2provider.test/authorize","clientID":"client-id","clientSecret":"client-secret","clusterName":"cluster-name","redirectURL":"https://gangplank.example.test/callback","tokenURL":"https://oauth2provider.test/token"}` | Custom inline Gangplank configuration (ENV Styles) |
+| gangplank.enabled | bool | `false` | Enable Gangplank |
+| gangplank.envFrom | list | `[]` |  |
+| gangplank.envs | object | `{}` |  |
+| gangplank.hostUsers | bool | `true` | Don't use Host Users (User Namespaces) |
+| gangplank.image.pullPolicy | string | `"IfNotPresent"` |  |
+| gangplank.image.repository | string | `"registry.sighup.io/fury/gangplank"` |  |
+| gangplank.image.tag | string | `"1.1.1"` |  |
+| gangplank.imagePullSecrets | list | `[]` | Configuration for `imagePullSecrets` so that you can use a private images registry. |
+| gangplank.ingress.annotations | object | `{}` |  |
+| gangplank.ingress.className | string | `""` |  |
+| gangplank.ingress.enabled | bool | `false` |  |
+| gangplank.ingress.hosts[0].host | string | `"chart-example.local"` |  |
+| gangplank.ingress.hosts[0].paths[0].path | string | `"/"` |  |
+| gangplank.ingress.hosts[0].paths[0].pathType | string | `"ImplementationSpecific"` |  |
+| gangplank.ingress.tls | list | `[]` |  |
+| gangplank.livenessProbe | object | `{"httpGet":{"path":"/","port":"http"}}` | Configure the liveness probe using Deployment probe specs |
+| gangplank.nodeSelector | object | `{}` | Set the node selector |
+| gangplank.podAnnotations | object | `{}` | Annotations to add to the pod. |
+| gangplank.podLabels | object | `{}` | Labels to add to the pod. |
+| gangplank.podSecurityContext | object | `{"seccompProfile":{"type":"RuntimeDefault"}}` | Set the securityContext for the Pod |
+| gangplank.priorityClassName | string | `""` | Set a pod priorityClassName |
+| gangplank.readinessProbe | object | `{"httpGet":{"path":"/","port":"http"}}` | Configure the readiness probe using Deployment probe spec |
+| gangplank.replicaCount | int | `1` | Set the replica count |
+| gangplank.resources | object | `{}` | Set the resource requests/limits |
+| gangplank.securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"privileged":false,"readOnlyRootFilesystem":true,"runAsGroup":65534,"runAsNonRoot":true,"runAsUser":65534}` | Set the securityContext for the Container |
+| gangplank.sensitiveEnvs | object | `{"GANGPLANK_CONFIG_SESSION_SECURITY_KEY":"session-security-key"}` | Environment variables (Secret) |
+| gangplank.service.port | int | `80` |  |
+| gangplank.service.type | string | `"ClusterIP"` |  |
+| gangplank.serviceAccount.annotations | object | `{}` |  |
+| gangplank.serviceAccount.automount | bool | `true` |  |
+| gangplank.serviceAccount.create | bool | `true` |  |
+| gangplank.serviceAccount.name | string | `""` |  |
+| gangplank.tolerations | list | `[]` | Set list of tolerations |
+| gangplank.topologySpreadConstraints | list | `[]` | Set topology spread constraints |
+| gangplank.volumeMounts | list | `[]` | Additional volumeMounts on the output Deployment definition. |
+| gangplank.volumes | list | `[]` | Additional volumes on the output Deployment definition. |
 
 ## Created resources
 

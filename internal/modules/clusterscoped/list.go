@@ -1,3 +1,6 @@
+// Copyright 2020-2025 Project Capsule Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package clusterscoped
 
 import (
@@ -53,7 +56,7 @@ func (l list) Handle(proxyTenants []*tenant.ProxyTenant, proxyRequest request.Re
 
 	gvk := utils.GetGVKFromURL(proxyRequest.GetHTTPRequest().URL.Path)
 
-	_, requirements := utils.GetClusterScopeRequirements(gvk, proxyTenants)
+	_, requirements := GetClusterScopeRequirements(gvk, proxyTenants)
 	if len(requirements) > 0 {
 		switch httpRequest.Method {
 		case http.MethodGet:

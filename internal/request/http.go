@@ -1,4 +1,4 @@
-// Copyright 2020-2023 Project Capsule Authors.
+// Copyright 2020-2025 Project Capsule Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package request
@@ -19,6 +19,7 @@ import (
 
 type http struct {
 	*h.Request
+
 	authTypes                  []AuthType
 	usernameClaimField         string
 	ignoredImpersonationGroups []string
@@ -66,7 +67,7 @@ func (h http) GetUserAndGroups() (username string, groups []string, err error) {
 						Groups: groups,
 					},
 				}
-				if err = h.client.Create(h.Request.Context(), ac); err != nil {
+				if err = h.client.Create(h.Context(), ac); err != nil {
 					return "", nil, err
 				}
 
@@ -95,7 +96,7 @@ func (h http) GetUserAndGroups() (username string, groups []string, err error) {
 					Groups: groups,
 				},
 			}
-			if err = h.client.Create(h.Request.Context(), ac); err != nil {
+			if err = h.client.Create(h.Context(), ac); err != nil {
 				return "", nil, err
 			}
 
@@ -139,7 +140,7 @@ func (h http) processBearerToken() (username string, groups []string, err error)
 		},
 	}
 
-	if err = h.client.Create(h.Request.Context(), tr); err != nil {
+	if err = h.client.Create(h.Context(), tr); err != nil {
 		return "", nil, fmt.Errorf("cannot create TokenReview")
 	}
 
@@ -179,7 +180,7 @@ func (h http) bearerToken() (string, error) {
 
 		return "", NewErrUnauthorized("Websocket Protocol token is undefined")
 	default:
-		return "", NewErrUnauthorized("unauthenticated users are not supported")
+		return "", NewErrUnauthorized("no authentication headers found. Unauthenticated users are not supported")
 	}
 }
 
@@ -213,7 +214,7 @@ func (h http) authenticationFns() []authenticationFn {
 	}
 	// Dead man switch, if no strategy worked, the proxy cannot work
 	fns = append(fns, func() (string, []string, error) {
-		return "", nil, NewErrUnauthorized("unauthenticated users not supported")
+		return "", nil, NewErrUnauthorized("no authentication provider available. unauthenticated users not supported")
 	})
 
 	return fns
