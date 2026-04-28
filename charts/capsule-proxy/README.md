@@ -95,7 +95,7 @@ If you only need to make minor customizations, you can specify them on the comma
 | global.jobs.certs.image.pullPolicy | string | `"IfNotPresent"` | Set the image pull policy of the post install certgen job |
 | global.jobs.certs.image.registry | string | `"registry.k8s.io"` | Set the image repository of the post install certgen job |
 | global.jobs.certs.image.repository | string | `"ingress-nginx/kube-webhook-certgen"` | Set the image repository of the post install certgen job |
-| global.jobs.certs.image.tag | string | `"v1.6.7"` | Set the image tag of the post install certgen job |
+| global.jobs.certs.image.tag | string | `"v1.6.9"` | Set the image tag of the post install certgen job |
 | global.jobs.certs.nodeSelector | object | `{}` | Set the node selector |
 | global.jobs.certs.podSecurityContext | object | `{"enabled":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the job pods. |
 | global.jobs.certs.priorityClassName | string | `""` | Set a pod priorityClassName |
@@ -212,6 +212,8 @@ You can manage the certificate with the help of [cert-manager](https://cert-mana
 | certManager.generateCertificates | bool | `true` | Set if the cert manager will generate SSL certificates (self-signed or CA-signed) |
 | certManager.issuer.kind | string | `"Issuer"` | Set if the cert manager will generate either self-signed or CA signed SSL certificates. Its value will be either Issuer or ClusterIssuer |
 | certManager.issuer.name | string | `""` | Set the name of the ClusterIssuer if issuer kind is ClusterIssuer and if cert manager will generate CA signed SSL certificates |
+| certManager.secretTemplate.ca | object | `{}` | Labels and annotations added to the self-signed CA certificate secret |
+| certManager.secretTemplate.certificate | object | `{}` | Labels and annotations added to the certificate secret |
 
 ### Webhook Parameters
 

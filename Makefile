@@ -190,7 +190,7 @@ ifeq ($(CAPSULE_PROXY_MODE),http)
 		--set "serviceMonitor.enabled=false" \
 		--set "options.generateCertificates=false" \
 		--set "certManager.generateCertificates=false" \
-		--set "options.extraArgs={--feature-gates=ProxyAllNamespaced=true}"
+		--set "options.extraArgs={--feature-gates=ProxyClusterScoped=true,--feature-gates=ProxyAllNamespaced=true}"
 else
 	@echo "Running in HTTPS mode"
 	@echo "Installing Capsule-Proxy using HELM..."
@@ -206,7 +206,7 @@ else
 		--set "serviceMonitor.enabled=false" \
 		--set "options.generateCertificates=false" \
 		--set "certManager.certificate.ipAddresses={127.0.0.1}" \
-		--set "options.extraArgs={--feature-gates=ProxyAllNamespaced=true}"
+		--set "options.extraArgs={--feature-gates=ProxyClusterScoped=true,--feature-gates=ProxyAllNamespaced=true}"
 endif
 	@kubectl rollout restart ds capsule-proxy -n capsule-system || true
 	$(MAKE) generate-kubeconfigs
@@ -235,7 +235,7 @@ generate-kubeconfigs:
 		&& mv cluster-admin-admin.kubeconfig cluster-admin.kubeconfig \
 		&& KUBECONFIG=cluster-admin.kubeconfig kubectl config set clusters.kind-capsule.certificate-authority-data "$$CA_B64" \
 		&& KUBECONFIG=cluster-admin.kubeconfig kubectl config set clusters.kind-capsule.server https://127.0.0.1:9001 \
-		&& $(KUBECTL) create clusterrolebinding custom-cluster-admin --clusterrole=cluster-admin --user=cluster-admin \
+		&& $(KUBECTL) create clusterrolebinding custom-cluster-admin --clusterrole=cluster-admin --user=cluster-admin  || true \
 		&& curl -s https://raw.githubusercontent.com/projectcapsule/capsule/main/hack/create-user.sh | bash -s -- dave soil projectcapsule.dev,capsule.clastix.io,bar.clastix.io \
 		&& mv dave-soil.kubeconfig dave.kubeconfig \
 		&& kubectl --kubeconfig=dave.kubeconfig config set clusters.kind-capsule.certificate-authority-data "$$CA_B64" \
@@ -254,10 +254,10 @@ wait-for-helmreleases:
 
 rbac-fix:
 	@echo "RBAC customization..."
-	@kubectl create clusterrole capsule-selfsubjectaccessreviews --verb=create --resource=selfsubjectaccessreviews.authorization.k8s.io
-	@kubectl create clusterrole capsule-apis --verb="get" --non-resource-url="/api/*" --non-resource-url="/api" --non-resource-url="/apis/*" --non-resource-url="/apis" --non-resource-url="/version"
-	@kubectl create clusterrolebinding capsule:selfsubjectaccessreviews --clusterrole=capsule-selfsubjectaccessreviews --group=capsule.clastix.io
-	@kubectl create clusterrolebinding capsule:apis --clusterrole=capsule-apis --group=capsule.clastix.io
+	@kubectl create clusterrole capsule-selfsubjectaccessreviews --verb=create --resource=selfsubjectaccessreviews.authorization.k8s.io || true
+	@kubectl create clusterrole capsule-apis --verb="get" --non-resource-url="/api/*" --non-resource-url="/api" --non-resource-url="/apis/*" --non-resource-url="/apis" --non-resource-url="/version" || true
+	@kubectl create clusterrolebinding capsule:selfsubjectaccessreviews --clusterrole=capsule-selfsubjectaccessreviews --group=capsule.clastix.io || true
+	@kubectl create clusterrolebinding capsule:apis --clusterrole=capsule-apis --group=capsule.clastix.io || true
 
 # Run tests
 .PHONY: test
@@ -317,14 +317,14 @@ helm-doc:
 # -- Tools
 ####################
 CONTROLLER_GEN         := $(LOCALBIN)/controller-gen
-CONTROLLER_GEN_VERSION ?= v0.20.0
+CONTROLLER_GEN_VERSION ?= v0.20.1
 CONTROLLER_GEN_LOOKUP  := kubernetes-sigs/controller-tools
 controller-gen:
 	@test -s $(CONTROLLER_GEN) && $(CONTROLLER_GEN) --version | grep -q $(CONTROLLER_GEN_VERSION) || \
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION))
 
 GINKGO         := $(LOCALBIN)/ginkgo
-GINKGO_VERSION := v2.27.2
+GINKGO_VERSION := v2.28.2
 GINKGO_LOOKUP  := onsi/ginkgo
 ginkgo: ## Download ginkgo locally if necessary.
 	$(call go-install-tool,$(GINKGO),github.com/$(GINKGO_LOOKUP)/v2/ginkgo@$(GINKGO_VERSION))
@@ -364,7 +364,7 @@ nwa:
 	$(call go-install-tool,$(NWA),github.com/$(NWA_LOOKUP)@$(NWA_VERSION))
 
 GOLANGCI_LINT          := $(LOCALBIN)/golangci-lint
-GOLANGCI_LINT_VERSION  := v2.4.0
+GOLANGCI_LINT_VERSION  := v2.11.4
 GOLANGCI_LINT_LOOKUP   := golangci/golangci-lint
 golangci-lint: ## Download golangci-lint locally if necessary.
 	@test -s $(GOLANGCI_LINT) && $(GOLANGCI_LINT) -h | grep -q $(GOLANGCI_LINT_VERSION) || \
